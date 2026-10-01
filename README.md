@@ -59,6 +59,10 @@ bad input -> 400. Partial requests are **all-or-nothing**.
 `seats_available|held|confirmed|total{show_id}` (gauges read from the DB at scrape time), plus HTTP latency
 histograms, JVM and Hikari pool metrics. Counters are per-process (reset on restart).
 
+## Deploy on AWS (single free-tier VM) - see [DEPLOY-AWS.md](DEPLOY-AWS.md)
+
+Alternative below: Render + Neon.
+
 ## Deploy (Render + Neon)
 
 1. Push this repo to GitHub.

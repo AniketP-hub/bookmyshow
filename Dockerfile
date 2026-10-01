@@ -3,6 +3,7 @@ FROM eclipse-temurin:21-jdk AS build
 WORKDIR /src
 COPY .mvn/ .mvn/
 COPY mvnw pom.xml ./
+ENV MAVEN_OPTS="-Xmx400m"
 RUN chmod +x mvnw && ./mvnw -q -B dependency:go-offline
 COPY src/ src/
 RUN ./mvnw -q -B -DskipTests package

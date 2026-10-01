@@ -1,0 +1,5 @@
+# Automatic HTTPS (Let's Encrypt) for $DOMAIN, proxying to the app container.
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy app:8080
+}

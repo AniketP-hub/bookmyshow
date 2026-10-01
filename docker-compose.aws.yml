@@ -1,0 +1,48 @@
+# Production-style stack for ONE small VM (e.g. an AWS EC2 free-tier instance):
+#   internet -> caddy (HTTPS, :80/:443) -> app (:8080, not published) -> db (Postgres, volume on the VM's disk)
+# Usage: cp .env.example .env && edit it, then: docker compose -f docker-compose.aws.yml up -d --build
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: seats
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    # modest memory footprint for a 1-2 GB VM; durability settings stay at their safe defaults
+    command: ["postgres", "-c", "shared_buffers=128MB", "-c", "max_connections=100", "-c", "work_mem=4MB"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d seats"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgres://postgres:${DB_PASSWORD}@db:5432/seats
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN in .env}
+      TOKEN_SECRET: ${TOKEN_SECRET:?set TOKEN_SECRET in .env}
+      ALLOW_DEV_TOKENS: ${ALLOW_DEV_TOKENS:-true}
+      DB_POOL_MAX: ${DB_POOL_MAX:-20}
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--Xmx400m -XX:+UseSerialGC -Xss512k -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=128m -XX:ReservedCodeCacheSize=48m}
+    expose: ["8080"]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [app]
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+
+volumes:
+  pgdata:
+  caddy_data:
