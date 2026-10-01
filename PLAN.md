@@ -4,9 +4,9 @@
 
 | Choice | Pick | Why |
 |---|---|---|
-| Language/framework | Node 22 + Fastify 5 | Fast, low overhead for 20k concurrent connections; structured logging (pino) built in |
+| Language/framework | Java 21 + Spring Boot 3 (virtual threads, Hikari) | You know Java; virtual threads handle 20k concurrent requests, Micrometer gives Prometheus metrics, JSON logs built in |
 | Datastore | **PostgreSQL 16** (single DB) | Row locks, `UNIQUE` constraints, `CHECK` constraints and `INSERT ... ON CONFLICT` give us the atomic decision in the DB itself. Not Redis/Mongo: no cross-key transactions or constraint safety net |
-| Metrics | `prom-client` at `/metrics` | Prometheus format; gauges are computed from the DB at scrape time so they reconcile with the API |
+| Metrics | Micrometer at `/metrics` | Prometheus format; gauges are computed from the DB at scrape time so they reconcile with the API |
 | Container | Dockerfile + docker-compose (app + Postgres) | Clean checkout runs the same as the deploy |
 | Hosting | **Render** (Docker web service, free) + **Neon** (free serverless Postgres) | See below |
 
@@ -30,13 +30,13 @@
 
 ## Steps
 
-1. [x] Project scaffold, schema, service logic, API, auth, metrics, structured logs
-2. [ ] Dockerfile, docker-compose, render.yaml, Makefile
-3. [ ] Run locally against Postgres; smoke test endpoints
-4. [ ] `burst/burst.js`: hot-seat storm, 20k stampede, retries, limit race, spoof/cancel checks, invariant polling, metrics reconciliation
-5. [ ] Run the burst locally; fix anything that 5xxs or breaks the invariant
-6. [ ] README (run, burst, tokens, metrics/logs) and WRITEUP.md (incl. honest AI usage)
-7. [ ] Incremental local git commits throughout
+1. [x] Project scaffold, schema, service logic, API, auth, metrics, structured logs (Java)
+2. [x] Dockerfile, docker-compose, render.yaml, Makefile
+3. [x] Run locally against Postgres; smoke test endpoints
+4. [x] `burst/Burst.java`: hot-seat storm, 20k stampede, retries, limit race, spoof/cancel checks, invariant polling, metrics reconciliation
+5. [x] Run the burst locally; fix anything that 5xxs or breaks the invariant
+6. [x] README (run, burst, tokens, metrics/logs) and WRITEUP.md (incl. honest AI usage)
+7. [x] Incremental local git commits throughout
 8. [ ] **You:** push to GitHub, create Neon DB, deploy on Render with the blueprint, set `DATABASE_URL`, `ADMIN_TOKEN`, `TOKEN_SECRET`; then run `./burst.sh <URL>`
 
 I cannot deploy for you (no account access), so step 8 is yours; I will give exact instructions.
