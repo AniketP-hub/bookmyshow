@@ -188,9 +188,10 @@ public class SeatService {
     }
 
     /**
-     * All-or-nothing reservation. The atomic decision is the single transaction below: row locks on the seat rows
-     * (taken in deterministic label order) + a guarded status check/UPDATE + a conditional quota upsert, all
-     * committing together or not at all.
+     * All-or-nothing reservation. The atomic decision is the Postgres function reserve_seats (see schema.sql): in one
+     * call it claims the idempotency key, locks the seat rows in label order, checks they are all 'available',
+     * applies the conditional per-user-limit upsert and flips the seats - committing together or not at all.
+     * Doing it in one round trip also keeps lock hold time short, which is what matters on a hot seat.
      */
     public ReserveResult reserve(String userId, String rawShowId, List<String> seats, String key) {
         UUID showId = parseUuid(rawShowId, 404, "show_not_found", "show not found");
@@ -204,17 +205,14 @@ public class SeatService {
 
         String hash = hash(showId, seats);
 
-        // Fast path 1: replay of an already-committed key. (The authoritative check is the unique index below.)
-        List<Existing> prior = jdbc.query("SELECT * FROM reservations WHERE user_id = ? AND idempotency_key = ?", EXISTING, userId, key);
-        if (!prior.isEmpty()) return replay(prior.get(0), hash);
-
         if (seats.size() > show.perUserLimit()) {
             throw decline(409, "per_user_limit", "at most " + show.perUserLimit() + " seats per user for this show", Map.of("limit", show.perUserLimit()));
         }
 
-        // Fast path 2: reject without opening a transaction when a seat is visibly unavailable. A seat leaves
-        // 'available' only via a committed reserve, so this decline was true when read; it keeps a 500-way
-        // stampede on one seat from queueing 499 losers on a row lock. It is never used to GRANT a seat.
+        // Fast path: reject without taking any lock when a seat is visibly unavailable. A seat leaves 'available'
+        // only via a committed reserve, so this decline was true when read; it keeps a 500-way stampede on one seat
+        // from queueing 499 losers on a row lock. It is never used to GRANT a seat. (A retry of the caller's own
+        // successful request also sees its seats taken, so check for a stored key before declining.)
         List<String[]> peek = jdbc.query(con -> {
             PreparedStatement ps = con.prepareStatement("SELECT label, status FROM seats WHERE show_id = ? AND label = ANY(?)");
             ps.setObject(1, showId);
@@ -228,70 +226,70 @@ public class SeatService {
             throw decline(422, "unknown_seat", "unknown seat(s)", Map.of("seats", unknown));
         }
         List<String> unavailable = peek.stream().filter(p -> !p[1].equals("available")).map(p -> p[0]).toList();
-        if (!unavailable.isEmpty()) throw decline(409, "seat_taken", "seat(s) already taken", Map.of("seats", unavailable));
+        if (!unavailable.isEmpty()) {
+            List<Existing> prior = jdbc.query("SELECT * FROM reservations WHERE user_id = ? AND idempotency_key = ?", EXISTING, userId, key);
+            if (!prior.isEmpty()) return replay(prior.get(0), hash);
+            throw decline(409, "seat_taken", "seat(s) already taken", Map.of("seats", unavailable));
+        }
 
         long amount = Math.multiplyExact(show.pricePaise(), (long) seats.size());
         UUID id = UUID.randomUUID();
 
-        ReserveResult result = inTx(() -> {
-            // 1. Claim the idempotency key. A concurrent tx with the same key blocks on the unique index until
-            //    the first commits/aborts, so exactly one proceeds and the rest observe its committed row.
-            int claimed = jdbc.update(con -> {
-                PreparedStatement ps = con.prepareStatement(
-                        "INSERT INTO reservations (id, show_id, user_id, idempotency_key, request_hash, seats, amount_paise, status) "
-                                + "VALUES (?,?,?,?,?,?,?,'confirmed') ON CONFLICT (user_id, idempotency_key) DO NOTHING");
-                ps.setObject(1, id);
-                ps.setObject(2, showId);
-                ps.setString(3, userId);
-                ps.setString(4, key);
-                ps.setString(5, hash);
-                ps.setArray(6, textArray(ps, seats));
-                ps.setLong(7, amount);
-                return ps;
-            });
-            if (claimed == 0) {
-                Existing ex = jdbc.query("SELECT * FROM reservations WHERE user_id = ? AND idempotency_key = ?", EXISTING, userId, key).get(0);
-                return replay(ex, hash);
+        record Out(String outcome, Existing existing, List<String> detail) {}
+        Out out = callWithRetry(() -> jdbc.query(con -> {
+            PreparedStatement ps = con.prepareStatement("SELECT * FROM reserve_seats(?,?,?,?,?,?,?,?)");
+            ps.setObject(1, id);
+            ps.setObject(2, showId);
+            ps.setString(3, userId);
+            ps.setString(4, key);
+            ps.setString(5, hash);
+            ps.setArray(6, textArray(ps, seats));
+            ps.setLong(7, amount);
+            ps.setInt(8, show.perUserLimit());
+            return ps;
+        }, rs -> {
+            rs.next();
+            String outcome = rs.getString("outcome");
+            Existing ex = null;
+            if (outcome.equals("ok") || outcome.equals("replay")) {
+                ex = new Existing((UUID) rs.getObject("res_id"), outcome.equals("ok") ? showId : null, userId, rs.getString("res_hash"),
+                        Arrays.asList((String[]) rs.getArray("res_seats").getArray()), rs.getLong("res_amount"), rs.getString("res_status"));
             }
+            java.sql.Array d = rs.getArray("detail");
+            return new Out(outcome, ex, d == null ? List.of() : Arrays.asList((String[]) d.getArray()));
+        }));
 
-            // 2. Lock the seat rows in deterministic (label) order => two multi-seat requests can never deadlock.
-            List<String[]> locked = jdbc.query(con -> {
-                PreparedStatement ps = con.prepareStatement(
-                        "SELECT label, status FROM seats WHERE show_id = ? AND label = ANY(?) ORDER BY label FOR UPDATE");
-                ps.setObject(1, showId);
-                ps.setArray(2, textArray(ps, seats));
-                return ps;
-            }, (rs, i) -> new String[]{rs.getString(1), rs.getString(2)});
-            List<String> taken = locked.stream().filter(p -> !p[1].equals("available")).map(p -> p[0]).toList();
-            if (!taken.isEmpty()) throw decline(409, "seat_taken", "seat(s) already taken", Map.of("seats", taken));
+        return switch (out.outcome()) {
+            case "ok" -> {
+                metrics.confirmed(seats.size());
+                yield new ReserveResult(false, view(out.existing()));
+            }
+            case "replay" -> {
+                // the stored row may belong to another show if the key was reused; the hash includes the show id
+                Existing ex = out.existing();
+                yield replay(new Existing(ex.id(), showId, userId, ex.hash(), ex.seats(), ex.amount(), ex.status()), hash);
+            }
+            case "seat_taken" -> throw decline(409, "seat_taken", "seat(s) already taken", Map.of("seats", out.detail()));
+            case "per_user_limit" -> throw decline(409, "per_user_limit", "at most " + show.perUserLimit() + " seats per user for this show", Map.of("limit", show.perUserLimit()));
+            default -> throw new IllegalStateException("unexpected outcome " + out.outcome());
+        };
+    }
 
-            // 3. Guarded write: only rows still 'available' flip; if the count is short we abort everything.
-            int updated = jdbc.update(con -> {
-                PreparedStatement ps = con.prepareStatement(
-                        "UPDATE seats SET status = 'confirmed', reservation_id = ?, user_id = ? "
-                                + "WHERE show_id = ? AND label = ANY(?) AND status = 'available'");
-                ps.setObject(1, id);
-                ps.setString(2, userId);
-                ps.setObject(3, showId);
-                ps.setArray(4, textArray(ps, seats));
-                return ps;
-            });
-            if (updated != seats.size()) throw decline(409, "seat_taken", "seat(s) already taken", Map.of());
-
-            // 4. Per-user limit: conditional upsert. The row lock serialises one user's parallel requests; the
-            //    WHERE turns the increment into a no-op (0 rows) once it would exceed the limit.
-            int q = jdbc.update(
-                    "INSERT INTO user_show_quota (show_id, user_id, held) VALUES (?,?,?) "
-                            + "ON CONFLICT (show_id, user_id) DO UPDATE SET held = user_show_quota.held + EXCLUDED.held "
-                            + "WHERE user_show_quota.held + EXCLUDED.held <= ?",
-                    showId, userId, seats.size(), show.perUserLimit());
-            if (q == 0) throw decline(409, "per_user_limit", "at most " + show.perUserLimit() + " seats per user for this show", Map.of("limit", show.perUserLimit()));
-
-            return new ReserveResult(false, new Reservation(id, showId, userId, seats, amount, "confirmed"));
-        });
-
-        if (!result.replay()) metrics.confirmed(seats.size());
-        return result;
+    /** Retries when Postgres aborts for deadlock/serialization (should be rare: locks are taken in order); maps SX404. */
+    private <T> T callWithRetry(Supplier<T> call) {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return call.get();
+            } catch (ConcurrencyFailureException e) {
+                if (attempt >= 6) throw e;
+                try { Thread.sleep((long) (Math.random() * 20 * attempt)); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); throw e; }
+            } catch (org.springframework.jdbc.UncategorizedSQLException e) {
+                if (e.getSQLException() != null && "SX404".equals(e.getSQLException().getSQLState())) {
+                    throw decline(422, "unknown_seat", "unknown seat(s)", Map.of());
+                }
+                throw e;
+            }
+        }
     }
 
     // ---- cancel ----------------------------------------------------------------------------------

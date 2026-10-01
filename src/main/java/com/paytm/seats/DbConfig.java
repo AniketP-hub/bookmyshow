@@ -30,8 +30,12 @@ public class DbConfig {
         } else {
             URI uri = URI.create(url.replaceFirst("^postgres(ql)?://", "http://"));
             int port = uri.getPort() == -1 ? 5432 : uri.getPort();
-            c.setJdbcUrl("jdbc:postgresql://" + uri.getHost() + ":" + port + uri.getPath()
-                    + (uri.getRawQuery() != null ? "?" + uri.getRawQuery() : ""));
+            // drop libpq-only params pgjdbc does not understand (e.g. Neon's channel_binding=require)
+            String q = uri.getRawQuery() == null ? "" : java.util.Arrays.stream(uri.getRawQuery().split("&"))
+                    .filter(p -> !p.startsWith("channel_binding=")).collect(java.util.stream.Collectors.joining("&"));
+            boolean pooler = uri.getHost().contains("-pooler");
+            if (pooler) q += (q.isEmpty() ? "" : "&") + "prepareThreshold=0"; // PgBouncer transaction mode
+            c.setJdbcUrl("jdbc:postgresql://" + uri.getHost() + ":" + port + uri.getPath() + (q.isEmpty() ? "" : "?" + q));
             if (uri.getRawUserInfo() != null) {
                 String[] ui = uri.getRawUserInfo().split(":", 2);
                 c.setUsername(URLDecoder.decode(ui[0], StandardCharsets.UTF_8));
@@ -51,7 +55,8 @@ public class DbConfig {
         c.setConnectionTimeout(waitMs);
         c.setInitializationFailTimeout(-1);
         // never leave a connection idle inside a transaction (e.g. a crashed request)
-        c.addDataSourceProperty("options", "-c idle_in_transaction_session_timeout=20000");
+        // (startup `options` are rejected by PgBouncer-style poolers such as Neon's -pooler endpoint)
+        if (!c.getJdbcUrl().contains("-pooler")) c.addDataSourceProperty("options", "-c idle_in_transaction_session_timeout=20000");
         return new HikariDataSource(c);
     }
 

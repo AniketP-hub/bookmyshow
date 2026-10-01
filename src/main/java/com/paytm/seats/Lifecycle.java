@@ -35,10 +35,19 @@ public class Lifecycle {
             for (int i = 1; ; i++) {
                 try {
                     String ddl = new String(new ClassPathResource("schema.sql").getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                    // one transaction: the xact-scoped advisory lock serialises concurrent boots and is released on
+                    // commit, so it is safe behind transaction-mode poolers (a session lock could leak there)
                     jdbc.execute((java.sql.Connection c) -> {
+                        c.setAutoCommit(false);
                         try (var st = c.createStatement()) {
-                            st.execute("SELECT pg_advisory_lock(727001)"); // serialise concurrent boots
-                            try { st.execute(ddl); } finally { st.execute("SELECT pg_advisory_unlock(727001)"); }
+                            st.execute("SELECT pg_advisory_xact_lock(727001)");
+                            st.execute(ddl);
+                            c.commit();
+                        } catch (Exception e) {
+                            c.rollback();
+                            throw e;
+                        } finally {
+                            c.setAutoCommit(true);
                         }
                         return null;
                     });

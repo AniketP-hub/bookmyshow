@@ -4,6 +4,7 @@ services:
     name: seat-reservation
     runtime: docker
     plan: free
+    region: ohio   # keep next to the Neon database (us-east-2) - round-trip latency dominates throughput
     healthCheckPath: /healthz
     envVars:
       - key: DATABASE_URL
@@ -15,4 +16,4 @@ services:
       - key: ALLOW_DEV_TOKENS
         value: "true"
       - key: DB_POOL_MAX
-        value: "20"
+        value: "30"

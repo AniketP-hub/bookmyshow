@@ -2,14 +2,17 @@
 
 ## The atomic decision
 
-One Postgres transaction per reserve (`SeatService.reserve`). Seats are rows in `seats`; the row is the lock.
+One Postgres function call per reserve (`reserve_seats` in `schema.sql`, called from `SeatService.reserve`), so the
+whole decision is a single atomic statement and a single network round trip (this matters: the first version used a
+multi-statement transaction and was 3x slower against a remote DB, holding hot-seat locks for several round trips).
+Seats are rows in `seats`; the row is the lock.
 
 1. Claim the idempotency key (below).
 2. `SELECT ... FROM seats WHERE show_id=? AND label = ANY(?) ORDER BY label FOR UPDATE` - row locks.
-3. If any is not `available` -> abort the whole transaction (409 `seat_taken`).
-4. `UPDATE seats SET status='confirmed', ... WHERE ... AND status='available'`; the updated row count must equal
-   the number of seats requested, otherwise abort.
-5. Conditional quota upsert (below). Commit.
+3. If any is not `available` -> delete the claim row and return `seat_taken` (409); nothing else was mutated yet.
+4. Conditional quota upsert (below); 0 rows -> delete the claim and return `per_user_limit`.
+5. `UPDATE seats SET status='confirmed', ... WHERE ... AND status='available'`; the updated row count must equal
+   the number of seats requested, otherwise the function raises and everything rolls back.
 
 Why it is race-free: two transactions can't both hold the lock on seat A12; the second blocks until the first
 commits, then re-reads the committed `confirmed` status and declines. The `status='available'` guard on the UPDATE
