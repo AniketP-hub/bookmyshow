@@ -1,0 +1,18 @@
+# Render Blueprint. DATABASE_URL points at a Neon (or Render) Postgres; set it in the dashboard.
+services:
+  - type: web
+    name: seat-reservation
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: TOKEN_SECRET
+        generateValue: true
+      - key: ALLOW_DEV_TOKENS
+        value: "true"
+      - key: DB_POOL_MAX
+        value: "20"
