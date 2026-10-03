@@ -42,6 +42,50 @@ public class Burst {
     static final LongAdder clientCancelled = new LongAdder();
     static final ConcurrentHashMap<String, LongAdder> clientDeclined = new ConcurrentHashMap<>();
 
+    // ---- progress reporting: print locally AND send to the server's live log (POST /logs/note, admin token) ----
+    static final ExecutorService noteExec = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "notes");
+        t.setDaemon(true);
+        return t;
+    });
+
+    static String jsonEsc(String s) {
+        StringBuilder sb = new StringBuilder();
+        for (char c : s.toCharArray()) {
+            if (c == '"' || c == '\\') sb.append('\\').append(c);
+            else if (c < 0x20) sb.append(' ');
+            else sb.append(c);
+        }
+        return sb.toString();
+    }
+
+    /** Print a line; also best-effort forward it (in order) so it shows in the service's live log view. */
+    static void out(String s) {
+        System.out.println(s);
+        if (base == null || http == null || s.isBlank()) return;
+        String text = s.strip();
+        noteExec.submit(() -> {
+            try {
+                HttpRequest req = HttpRequest.newBuilder(URI.create(base + "/logs/note")).timeout(Duration.ofSeconds(10))
+                        .header("Content-Type", "application/json").header("Authorization", "Bearer " + adminToken)
+                        .POST(HttpRequest.BodyPublishers.ofString("{\"text\":\"" + jsonEsc(text) + "\"}")).build();
+                http.send(req, HttpResponse.BodyHandlers.discarding());
+            } catch (Exception ignored) {
+                // live-log forwarding is optional; never affect the test
+            }
+        });
+    }
+
+    static void finish(int code) {
+        noteExec.shutdown();
+        try {
+            noteExec.awaitTermination(8, TimeUnit.SECONDS);
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        }
+        System.exit(code);
+    }
+
     static String str(String body, String field) {
         Matcher m = Pattern.compile("\"" + field + "\":\"([^\"]*)\"").matcher(body == null ? "" : body);
         return m.find() ? m.group(1) : "";
@@ -54,12 +98,12 @@ public class Burst {
 
     static void fail(String msg) {
         failures.add(msg);
-        System.out.println("  FAIL: " + msg);
+        out("  FAIL: " + msg);
     }
 
     static void check(boolean ok, String msg) {
         if (!ok) fail(msg);
-        else System.out.println("  ok:   " + msg);
+        else out("  ok:   " + msg);
     }
 
     static Res call(String method, String path, String token, String key, String json) {
@@ -178,7 +222,7 @@ public class Burst {
 
     public static void main(String[] args) throws Exception {
         if (args.length < 1) {
-            System.out.println("usage: java burst/Burst.java <BASE_URL>");
+            out("usage: java burst/Burst.java <BASE_URL>");
             System.exit(2);
         }
         base = args[0].replaceAll("/+$", "");
@@ -190,15 +234,15 @@ public class Burst {
         http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).connectTimeout(Duration.ofSeconds(30)).executor(vt).build();
         Random rnd = new Random(42);
 
-        System.out.println("== target " + base + "  (seats=" + N + " hot=" + HOT + "x" + HOT_USERS + " total=" + TOTAL + " conc=" + CONC + ")");
+        out("== target " + base + "  (seats=" + N + " hot=" + HOT + "x" + HOT_USERS + " total=" + TOTAL + " conc=" + CONC + ")");
 
         // ---- wait for readiness (cold start on free tiers can take a minute) --------------------------
         long deadline = System.currentTimeMillis() + 180_000;
         while (true) {
             Res r = call("GET", "/readyz", null, null, null);
             if (r.status() == 200) break;
-            if (System.currentTimeMillis() > deadline) { System.out.println("service never became ready: " + r.status()); System.exit(1); }
-            System.out.println("  waiting for /readyz (" + r.status() + ")...");
+            if (System.currentTimeMillis() > deadline) { out("service never became ready: " + r.status()); System.exit(1); }
+            out("  waiting for /readyz (" + r.status() + ")...");
             Thread.sleep(3000);
         }
         fiveXX.reset(); netErrors.reset();
@@ -210,10 +254,10 @@ public class Burst {
         for (int i = 1; i <= 40; i++) tSeats.add("T" + i);
         all.addAll(hot); all.addAll(cold); all.addAll(tSeats);
         Res created = call("POST", "/shows", adminToken, null, "{\"name\":\"burst-" + System.currentTimeMillis() + "\",\"seats\":" + seatsJson(all) + ",\"price_paise\":25000}");
-        if (created.status() != 201) { System.out.println("create show failed: " + created.status() + " " + created.body()); System.exit(1); }
+        if (created.status() != 201) { out("create show failed: " + created.status() + " " + created.body()); System.exit(1); }
         String showId = str(created.body(), "id");
         long totalSeats = all.size();
-        System.out.println("show " + showId + " total_seats=" + totalSeats);
+        out("show " + showId + " total_seats=" + totalSeats);
         Map<String, Double> m0 = metrics();
 
         // ---- live invariant poller ----------------------------------------------------------------------
@@ -233,7 +277,7 @@ public class Burst {
         });
 
         // ---- phase 1: hot seat storm ----------------------------------------------------------------------
-        System.out.println("\n== phase 1: hot-seat storm (" + HOT + " seats x " + HOT_USERS + " users, all at once)");
+        out("\n== phase 1: hot-seat storm (" + HOT + " seats x " + HOT_USERS + " users, all at once)");
         long t1 = System.nanoTime();
         Map<String, LongAdder> hotWins = new ConcurrentHashMap<>();
         List<Runnable> tasks = new ArrayList<>();
@@ -249,11 +293,11 @@ public class Burst {
         }
         Collections.shuffle(tasks, rnd);
         runAll(tasks, vt);
-        System.out.printf("  %d requests in %.1fs%n", tasks.size(), (System.nanoTime() - t1) / 1e9);
+        out(String.format("  %d requests in %.1fs", tasks.size(), (System.nanoTime() - t1) / 1e9));
         for (String seat : hot) check(hotWins.getOrDefault(seat, new LongAdder()).sum() == 1, seat + ": exactly one winner (got " + hotWins.getOrDefault(seat, new LongAdder()).sum() + ")");
 
         // ---- phase 2: mixed stampede ----------------------------------------------------------------------
-        System.out.println("\n== phase 2: stampede (" + TOTAL + " requests, " + USERS + " users, skewed to low seat numbers, 10% concurrent same-key duplicates)");
+        out("\n== phase 2: stampede (" + TOTAL + " requests, " + USERS + " users, skewed to low seat numbers, 10% concurrent same-key duplicates)");
         long t2 = System.nanoTime();
         tasks = new ArrayList<>();
         for (int i = 0; i < TOTAL; i++) {
@@ -269,7 +313,7 @@ public class Burst {
         Collections.shuffle(tasks, rnd);
         runAll(tasks, vt);
         double secs2 = (System.nanoTime() - t2) / 1e9;
-        System.out.printf("  %d requests in %.1fs (%.0f req/s)%n", tasks.size(), secs2, tasks.size() / secs2);
+        out(String.format("  %d requests in %.1fs (%.0f req/s)", tasks.size(), secs2, tasks.size() / secs2));
 
         // verify the ledgers right after phase 1+2 (no cancels yet, so any seat with >1 reservation is a double sale)
         long doubleSold = seatSales.entrySet().stream().filter(e -> e.getValue().size() > 1).count();
@@ -285,7 +329,7 @@ public class Burst {
         check(afterStampede.confirmed() == active.size(), "API confirmed (" + afterStampede.confirmed() + ") == seats won by clients (" + active.size() + ")");
 
         // ---- phase 3: targeted checks ------------------------------------------------------------------------
-        System.out.println("\n== phase 3: targeted checks");
+        out("\n== phase 3: targeted checks");
         Res r;
         r = call("POST", "/shows/" + showId + "/reserve", null, "k", "{\"seats\":[\"T1\"]}");
         check(r.status() == 401, "no token -> 401 (got " + r.status() + ")");
@@ -345,7 +389,7 @@ public class Burst {
         poller.join();
 
         // ---- phase 4: final reconciliation --------------------------------------------------------------------
-        System.out.println("\n== phase 4: final reconciliation");
+        out("\n== phase 4: final reconciliation");
         Counts fin = counts(showId);
         check(fin.ok() && fin.total() == totalSeats, "available + held + confirmed == total_seats: " + fin.available() + " + " + fin.held() + " + " + fin.confirmed() + " == " + fin.total());
         check(fin.confirmed() == active.size(), "API confirmed (" + fin.confirmed() + ") == seats held by clients (" + active.size() + ")");
@@ -363,21 +407,20 @@ public class Burst {
         check((long) gauge == fin.available(), "metrics seats_available gauge (" + (long) gauge + ") == API available (" + fin.available() + ")");
 
         // ---- report ----------------------------------------------------------------------------------------------
-        System.out.println("\n== outcome distribution (client side)");
-        new TreeMap<>(outcomes).forEach((k, v) -> System.out.printf("  %-52s %d%n", k, v.sum()));
-        System.out.println("  " + "-".repeat(60));
-        System.out.printf("  5xx responses: %d    network errors: %d%n", fiveXX.sum(), netErrors.sum());
+        out("\n== outcome distribution (client side)");
+        new TreeMap<>(outcomes).forEach((k, v) -> out(String.format("  %-52s %d", k, v.sum())));
+        out("  " + "-".repeat(60));
+        out(String.format("  5xx responses: %d    network errors: %d", fiveXX.sum(), netErrors.sum()));
         check(fiveXX.sum() == 0, "zero 5xx responses");
         check(netErrors.sum() == 0, "zero network errors / timeouts");
 
-        vt.shutdown();
-        System.out.println();
+        out("");
         if (failures.isEmpty()) {
-            System.out.println("RESULT: PASS");
+            out("RESULT: PASS");
         } else {
-            System.out.println("RESULT: FAIL (" + failures.size() + " checks)");
-            System.exit(1);
+            out("RESULT: FAIL (" + failures.size() + " checks)");
+            finish(1);
         }
-        System.exit(0);
+        finish(0);
     }
 }

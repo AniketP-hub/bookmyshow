@@ -1,11 +1,17 @@
 package com.paytm.seats;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -21,8 +27,27 @@ public class LogController {
     private static final int MAX_VIEWERS = 25;
     private final boolean enabled;
 
-    public LogController(@Value("${app.public-logs}") boolean enabled) {
+    private static final Logger BURST_LOG = LoggerFactory.getLogger("burst");
+    private final Auth auth;
+
+    public LogController(@Value("${app.public-logs}") boolean enabled, Auth auth) {
         this.enabled = enabled;
+        this.auth = auth;
+    }
+
+    /**
+     * Admin-only: the burst client forwards its progress lines ("ok: HOT1 exactly one winner", "RESULT: PASS") here so
+     * they appear in the live log next to the requests they produced. Not part of the reservation API.
+     */
+    @PostMapping("/logs/note")
+    public Map<String, Boolean> note(@RequestHeader(value = "Authorization", required = false) String authz,
+                                     @RequestBody(required = false) Map<String, Object> body) {
+        check();
+        auth.requireAdmin(authz);
+        Object t = body == null ? null : body.get("text");
+        if (!(t instanceof String s) || s.isBlank()) throw new DomainException(400, "invalid_request", "text is required");
+        BURST_LOG.info(s.replaceAll("[\\r\\n]+", " ").substring(0, Math.min(s.length(), 400)));
+        return Map.of("ok", true);
     }
 
     private void check() {

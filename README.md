@@ -176,7 +176,10 @@ Counters are per process and reset on restart.
 **Live logs, no server access needed.** Open `https://13-207-216-228.sslip.io/logs.html` in a browser (or
 `curl -N https://13-207-216-228.sslip.io/logs/stream`). It streams the service's own structured log lines as they are
 written, with running 2xx / 4xx / 5xx counters, a text filter (try `409`, `seat_taken`, a user id or a `request_id`), and
-pause / clear. `GET /logs?lines=500&filter=...` returns the recent tail as NDJSON. It is read-only, shows request ids,
+pause / clear. `GET /logs?lines=500&filter=...` returns the recent tail as NDJSON. When you run `Burst.java` with the admin token,
+its own progress (phase headers, every `ok:` / `FAIL:` check and the final `RESULT`) is forwarded to the server through the
+admin-only `POST /logs/note` and shows up in the same view, tagged **BURST**, in sequence with the requests that produced
+it - so the page shows both the traffic and the verdict. It is read-only, shows request ids,
 user ids and paths (never tokens), drops lines for slow viewers instead of slowing the service, and is switched by
 `PUBLIC_LOGS=true` (off by default in the jar; on in both compose files).
 

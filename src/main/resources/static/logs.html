@@ -18,6 +18,7 @@
   #dot.on { background: #6fd08c; }
   #log { padding: 8px 16px 40px; }
   .row { white-space: pre-wrap; word-break: break-all; padding: 1px 0; border-bottom: 1px solid #1a1e27; }
+  .burst { background: #14202b; } .tag { background: #2b6cb0; color: #fff; border-radius: 3px; padding: 0 5px; font-size: 11px; }
   .t { color: #6b7385 } .rid { color: #6b7385 } .path { color: #9cc4ff } .out { color: #c3a6ff } .app { color: #8a93a6; }
 </style>
 </head>
@@ -54,6 +55,10 @@
         + esc(e.method) + ' <span class="path">' + esc(e.path) + '</span> ' + esc(e.ms) + 'ms'
         + (e.user_id ? ' user=' + esc(e.user_id) : '') + (e.outcome ? ' <span class="out">' + esc(e.outcome) + '</span>' : '')
         + ' <span class="rid">' + esc(e.request_id || '') + '</span></div>';
+    }
+    if (e.logger_name === 'burst') {
+      var m = e.message || '', bc = m.indexOf('FAIL') >= 0 ? 's5' : (m.indexOf('ok:') >= 0 || m.indexOf('PASS') >= 0 ? 's2' : 'out');
+      return '<div class="row burst"><span class="t">' + esc((e['@timestamp'] || '').substring(11, 23)) + '</span> <span class="tag">BURST</span> <span class="' + bc + '">' + esc(m) + '</span></div>';
     }
     return '<div class="row app">' + esc((e['@timestamp'] || '').substring(11, 23)) + ' ' + esc(e.level || '') + ' ' + esc(e.message || line) + '</div>';
   }
