@@ -23,6 +23,8 @@ import java.util.regex.Pattern;
 public class SeatService {
     private static final Pattern UUID_RE = Pattern.compile("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
     private static final int MAX_SEATS_PER_REQUEST = 100;
+    // 10^12 paise (10,000 crore rupees): keeps price x seats-per-request far below Long.MAX_VALUE, so amounts never overflow
+    private static final long MAX_PRICE_PAISE = 1_000_000_000_000L;
 
     private final JdbcTemplate jdbc;
     private final TransactionTemplate tx;
@@ -78,7 +80,9 @@ public class SeatService {
     public ShowState createShow(Map<String, Object> body) {
         Object name = body.get("name"), price = body.get("price_paise"), seatsRaw = body.get("seats"), lim = body.get("per_user_limit");
         if (!(name instanceof String n) || n.isBlank() || n.length() > 200) throw bad("name must be a non-empty string");
-        if (!(price instanceof Integer || price instanceof Long) || ((Number) price).longValue() < 0) throw bad("price_paise must be a non-negative integer (paise)");
+        if (!(price instanceof Integer || price instanceof Long) || ((Number) price).longValue() < 0 || ((Number) price).longValue() > MAX_PRICE_PAISE) {
+            throw bad("price_paise must be an integer between 0 and " + MAX_PRICE_PAISE + " (paise)");
+        }
         long pricePaise = ((Number) price).longValue();
         int limit = defaultLimit;
         if (lim != null) {
