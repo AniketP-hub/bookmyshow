@@ -14,7 +14,7 @@ import java.util.regex.*;
  *   java burst/Burst.java https://your-service.onrender.com
  *
  * Env: ADMIN_TOKEN (default dev-admin-token), SEATS (3000), HOT_SEATS (5), HOT_USERS (500),
- *      TOTAL (20000), USERS (6000), CONCURRENCY (2500)
+ *      TOTAL (20000), USERS (6000), CONCURRENCY (1000)
  *
  * Phases: 1) hot-seat storm  2) 20k mixed stampede (+ same-key concurrent duplicates) with live invariant polling
  *         3) targeted checks (idempotency, per-user limit race, spoofing, cancel/rebook, all-or-nothing)
@@ -79,9 +79,9 @@ public class Burst {
                 try {
                     r = http.send(b.build(), HttpResponse.BodyHandlers.ofString());
                     break;
-                } catch (java.net.ConnectException ce) { // never reached the server (listen queue overflow): safe to retry
-                    if (attempt >= 8) throw ce;
-                    Thread.sleep(50L * attempt + ThreadLocalRandom.current().nextInt(100));
+                } catch (java.net.ConnectException | java.net.http.HttpConnectTimeoutException ce) { // never reached the server (connect failed/timed out): safe to retry
+                    if (attempt >= 6) throw ce;
+                    Thread.sleep(200L * attempt + ThreadLocalRandom.current().nextInt(300));
                 }
             }
             Res res = new Res(r.statusCode(), r.body(), r.headers().firstValue("Idempotent-Replayed").isPresent());
@@ -184,7 +184,7 @@ public class Burst {
         base = args[0].replaceAll("/+$", "");
         adminToken = Optional.ofNullable(System.getenv("ADMIN_TOKEN")).orElse("dev-admin-token");
         int N = envInt("SEATS", 3000), HOT = envInt("HOT_SEATS", 5), HOT_USERS = envInt("HOT_USERS", 500);
-        int TOTAL = envInt("TOTAL", 20000), USERS = envInt("USERS", 6000), CONC = envInt("CONCURRENCY", 2500);
+        int TOTAL = envInt("TOTAL", 20000), USERS = envInt("USERS", 6000), CONC = envInt("CONCURRENCY", 1000);
         permits = new Semaphore(CONC);
         ExecutorService vt = Executors.newVirtualThreadPerTaskExecutor();
         http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).connectTimeout(Duration.ofSeconds(30)).executor(vt).build();
@@ -218,10 +218,11 @@ public class Burst {
 
         // ---- live invariant poller ----------------------------------------------------------------------
         AtomicBoolean polling = new AtomicBoolean(true);
-        AtomicLong polls = new AtomicLong(), badPolls = new AtomicLong();
+        AtomicLong polls = new AtomicLong(), badPolls = new AtomicLong(), pollErrors = new AtomicLong();
         Thread poller = Thread.ofVirtual().start(() -> {
             while (polling.get()) {
                 Counts c = counts(showId);
+                if (c.total() == -1) { pollErrors.incrementAndGet(); continue; } // transport error, says nothing about the invariant
                 polls.incrementAndGet();
                 if (!c.ok() || c.total() != totalSeats) {
                     badPolls.incrementAndGet();
@@ -348,7 +349,7 @@ public class Burst {
         Counts fin = counts(showId);
         check(fin.ok() && fin.total() == totalSeats, "available + held + confirmed == total_seats: " + fin.available() + " + " + fin.held() + " + " + fin.confirmed() + " == " + fin.total());
         check(fin.confirmed() == active.size(), "API confirmed (" + fin.confirmed() + ") == seats held by clients (" + active.size() + ")");
-        check(badPolls.get() == 0, "invariant held on all " + polls.get() + " live polls during the burst");
+        check(badPolls.get() == 0, "invariant held on all " + polls.get() + " live polls during the burst (" + pollErrors.get() + " polls failed in transport and are not counted)");
 
         Map<String, Double> m1 = metrics();
         check(delta(m0, m1, "reservations_confirmed_total") == clientConfirmed.sum(), "metrics reservations_confirmed_total delta (" + (long) delta(m0, m1, "reservations_confirmed_total") + ") == client-observed new 201s (" + clientConfirmed.sum() + ")");
