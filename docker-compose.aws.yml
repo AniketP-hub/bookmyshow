@@ -41,6 +41,8 @@ services:
       PUBLIC_LOGS: ${PUBLIC_LOGS:-true}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--Xmx400m -XX:+UseSerialGC -Xss512k -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=128m -XX:ReservedCodeCacheSize=48m}
     expose: ["8080"]
+    sysctls:
+      net.core.somaxconn: 20000   # default 4096 per container; a connection stampede overflows it and gets dropped
 
   caddy:
     image: caddy:2-alpine
@@ -48,6 +50,8 @@ services:
     logging: *logging
     depends_on: [app]
     ports: ["80:80", "443:443"]
+    sysctls:
+      net.core.somaxconn: 20000
     environment:
       DOMAIN: ${DOMAIN:?set DOMAIN in .env}
     volumes:

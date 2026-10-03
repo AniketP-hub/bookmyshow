@@ -38,6 +38,7 @@ public class Burst {
     static final ConcurrentHashMap<String, List<String>> resSeats = new ConcurrentHashMap<>();  // reservation id -> seats
     static final ConcurrentHashMap<String, String> resUser = new ConcurrentHashMap<>();
     static final LongAdder netErrors = new LongAdder(), fiveXX = new LongAdder();
+    static final ConcurrentHashMap<String, LongAdder> netKinds = new ConcurrentHashMap<>();
     static final LongAdder clientConfirmed = new LongAdder(), clientReplay = new LongAdder();
     static final LongAdder clientCancelled = new LongAdder();
     static final ConcurrentHashMap<String, LongAdder> clientDeclined = new ConcurrentHashMap<>();
@@ -133,6 +134,7 @@ public class Burst {
             return res;
         } catch (Exception e) {
             netErrors.increment();
+            netKinds.computeIfAbsent(e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage()).replaceAll("\s+", " ").substring(0, Math.min(70, String.valueOf(e.getMessage()).length())), k -> new LongAdder()).increment();
             return new Res(-1, "{\"error\":\"net:" + e.getClass().getSimpleName() + "\"}", false);
         } finally {
             permits.release();
@@ -411,6 +413,7 @@ public class Burst {
         new TreeMap<>(outcomes).forEach((k, v) -> out(String.format("  %-52s %d", k, v.sum())));
         out("  " + "-".repeat(60));
         out(String.format("  5xx responses: %d    network errors: %d", fiveXX.sum(), netErrors.sum()));
+        netKinds.forEach((k, v) -> out("    network error kind: " + k + "  x" + v.sum()));
         check(fiveXX.sum() == 0, "zero 5xx responses");
         check(netErrors.sum() == 0, "zero network errors / timeouts");
 

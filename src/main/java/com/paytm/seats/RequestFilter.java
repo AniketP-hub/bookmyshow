@@ -7,12 +7,14 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.concurrent.Semaphore;
 import java.util.UUID;
 
 /** Correlation id (request_id, echoed as X-Request-Id) + one structured access-log line per request. */
@@ -20,6 +22,15 @@ import java.util.UUID;
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class RequestFilter extends OncePerRequestFilter {
     private static final Logger log = LoggerFactory.getLogger("access");
+    private final Semaphore inflight;
+
+    public RequestFilter(@Value("${app.max-inflight}") int maxInflight) {
+        this.inflight = new Semaphore(maxInflight);
+    }
+
+    private static boolean isOps(String path) {
+        return path.equals("/metrics") || path.equals("/healthz") || path.equals("/readyz") || path.startsWith("/logs");
+    }
 
     @Override
     protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain) throws ServletException, IOException {
@@ -28,8 +39,14 @@ public class RequestFilter extends OncePerRequestFilter {
         MDC.put("request_id", rid);
         res.setHeader("X-Request-Id", rid);
         long t0 = System.nanoTime();
+        boolean limited = !isOps(req.getRequestURI());
         try {
-            chain.doFilter(req, res);
+            if (limited) inflight.acquireUninterruptibly(); // bulkhead: wait in line rather than swamp the DB pool
+            try {
+                chain.doFilter(req, res);
+            } finally {
+                if (limited) inflight.release();
+            }
         } finally {
             String path = req.getRequestURI();
             if (!path.equals("/metrics") && !path.equals("/healthz") && !path.startsWith("/logs")) { // /logs* excluded: viewing logs must not generate logs
