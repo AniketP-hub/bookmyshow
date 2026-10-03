@@ -172,6 +172,19 @@ Counters are per process and reset on restart.
 **Logs.** One structured JSON line per request with `request_id` (echoed in `X-Request-Id` and in error bodies),
 `user_id`, `method`, `path`, `status`, `ms`, `outcome`. Application logs are JSON too.
 
+**Recording logs during a burst** (on the server; two SSH windows):
+
+```sh
+# window 1: start recording (stops on Ctrl+C, or pass seconds: ./deploy/record-logs.sh 180)
+cd ~/bookmyshow && ./deploy/record-logs.sh
+# window 2 / your laptop: run the burst, then Ctrl+C in window 1
+```
+
+This writes `~/logs/app-<time>.jsonl` (raw) and `app-<time>.summary.txt` (request counts by status and outcome,
+latency p50/p95/p99, any 5xx or application ERROR lines). A recorded summary from the live deployment is kept in
+[docs/live-burst-summary.txt](docs/live-burst-summary.txt) once added. Any `request_id` in a response or error body can
+be looked up with `grep <request_id> ~/logs/app-*.jsonl`. Live view: `docker compose -f docker-compose.aws.yml logs -f app`.
+
 ## Run locally
 
 Requirements: Docker (or any PostgreSQL) and JDK 21 for the burst.
