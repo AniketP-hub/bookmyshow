@@ -3,8 +3,8 @@
 Java 21 + Spring Boot 3 + PostgreSQL. Sells assigned seats; never double-sells, never exceeds the per-user limit,
 never double-charges a retried request. Design details: [WRITEUP.md](WRITEUP.md).
 
-- **Live URL:** `<fill in after deploy>`
-- **Metrics:** `<live-url>/metrics` (Prometheus text)  ·  **Logs:** Render dashboard -> service -> Logs (JSON lines)
+- **Live URL:** https://13-207-216-228.sslip.io  (AWS EC2, Mumbai; admin token supplied separately)
+- **Metrics:** https://13-207-216-228.sslip.io/metrics  |  **Health:** /healthz, /readyz  |  **Logs:** `docker compose -f docker-compose.aws.yml logs -f app` on the host (JSON lines with `request_id`)
 
 ## Run locally (Docker)
 
