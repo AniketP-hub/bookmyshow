@@ -95,11 +95,25 @@ public class Metrics {
                 snap = m;
                 snapAt = System.currentTimeMillis();
                 for (UUID id : m.keySet()) ensureGauges(id);
+                dropGaugesOutside(m.keySet());
             } catch (Exception e) {
                 snap = Map.of(); // DB down => gauges NaN rather than stale lies
                 snapAt = System.currentTimeMillis();
             }
             return snap;
+        }
+    }
+
+    /** Shows that fell out of the newest-20 window stop being exported, so meters (and memory) do not pile up. */
+    private void dropGaugesOutside(Set<UUID> keep) {
+        for (UUID id : registered) {
+            if (keep.contains(id)) continue;
+            String sid = id.toString();
+            for (String name : List.of("seats.available", "seats.held", "seats.confirmed", "seats.total")) {
+                var g = registry.find(name).tag("show_id", sid).gauge();
+                if (g != null) registry.remove(g);
+            }
+            registered.remove(id);
         }
     }
 

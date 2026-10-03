@@ -242,3 +242,21 @@ Dockerfile, docker-compose*.yml  container builds (local, AWS)
 deploy/                          Caddy config and VM setup script
 WRITEUP.md, DEPLOY-AWS.md        design write-up, deployment guide
 ```
+
+## Storage, retention and cleanup
+
+| Data | Where | Bounded by |
+|---|---|---|
+| Live-log buffer behind `/logs.html` | app memory | last 3,000 lines (about 1-2 MB), older lines are dropped |
+| Metrics | app memory | counters are fixed-size; seat gauges only for the newest 20 shows |
+| Container logs | VM disk (Docker) | rotated: 10 MB x 3 files per container (about 30 MB max) |
+| Shows, seats, reservations | Postgres volume on the VM disk | grows about 1-2 MB per full burst; delete with the script below |
+| Recorded log files (`~/logs`), old Docker images | VM disk | removed by the script below |
+
+Nothing is deleted automatically (reviewers may want to inspect results). To free space on the VM:
+
+```sh
+cd ~/bookmyshow
+./deploy/cleanup.sh        # shows older than 24 h + Docker prune + recordings older than 7 days (newest show is always kept)
+./deploy/cleanup.sh 0      # everything except the newest show
+```

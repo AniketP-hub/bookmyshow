@@ -1,6 +1,14 @@
+# Docker keeps container logs forever by default; cap them so the disk never fills.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: postgres:16-alpine
+    logging: *logging
     environment:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: seats
@@ -12,6 +20,7 @@ services:
       retries: 20
   app:
     build: .
+    logging: *logging
     depends_on:
       db: { condition: service_healthy }
     environment:
