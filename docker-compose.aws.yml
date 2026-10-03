@@ -29,6 +29,7 @@ services:
       TOKEN_SECRET: ${TOKEN_SECRET:?set TOKEN_SECRET in .env}
       ALLOW_DEV_TOKENS: ${ALLOW_DEV_TOKENS:-true}
       DB_POOL_MAX: ${DB_POOL_MAX:-20}
+      PUBLIC_LOGS: ${PUBLIC_LOGS:-true}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--Xmx400m -XX:+UseSerialGC -Xss512k -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=128m -XX:ReservedCodeCacheSize=48m}
     expose: ["8080"]
 

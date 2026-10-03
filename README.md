@@ -18,7 +18,7 @@ Design and reasoning: [WRITEUP.md](WRITEUP.md). AWS deployment guide: [DEPLOY-AW
 | Base URL | `https://13-207-216-228.sslip.io` (AWS EC2, Mumbai) |
 | Health / readiness | `/healthz`, `/readyz` |
 | Metrics (Prometheus) | `/metrics` |
-| Logs | JSON lines with a `request_id`; on the host: `docker compose -f docker-compose.aws.yml logs -f app` |
+| **Live logs (public, read-only)** | **`/logs.html`** - watch requests arrive in real time while you run your own burst. Raw: `/logs?lines=500`, stream: `/logs/stream` |
 | Admin token | supplied separately with the submission |
 
 Quick check: `curl https://13-207-216-228.sslip.io/readyz` -> `{"status":"ready","db":"up"}`
@@ -87,6 +87,7 @@ curl -s -X POST $BASE/reservations/<reservation_id>/cancel -H "Authorization: Be
 | `GET /healthz` | none | liveness (process is up) |
 | `GET /readyz` | none | readiness: DB reachable and schema applied; `503` otherwise |
 | `GET /metrics` | none | Prometheus metrics |
+| `GET /logs.html`, `/logs`, `/logs/stream` | none | read-only live logs (see Observability) |
 
 ### Responses
 
@@ -172,6 +173,13 @@ Counters are per process and reset on restart.
 **Logs.** One structured JSON line per request with `request_id` (echoed in `X-Request-Id` and in error bodies),
 `user_id`, `method`, `path`, `status`, `ms`, `outcome`. Application logs are JSON too.
 
+**Live logs, no server access needed.** Open `https://13-207-216-228.sslip.io/logs.html` in a browser (or
+`curl -N https://13-207-216-228.sslip.io/logs/stream`). It streams the service's own structured log lines as they are
+written, with running 2xx / 4xx / 5xx counters, a text filter (try `409`, `seat_taken`, a user id or a `request_id`), and
+pause / clear. `GET /logs?lines=500&filter=...` returns the recent tail as NDJSON. It is read-only, shows request ids,
+user ids and paths (never tokens), drops lines for slow viewers instead of slowing the service, and is switched by
+`PUBLIC_LOGS=true` (off by default in the jar; on in both compose files).
+
 **Recording logs during a burst** (on the server; two SSH windows):
 
 ```sh
@@ -211,6 +219,7 @@ The schema is created automatically on startup.
 | `TOKEN_SECRET` | `dev-token-secret` | HMAC key for tokens from `/auth/token` |
 | `ALLOW_DEV_TOKENS` | `true` | accept `Bearer user:<id>` (turn off in production) |
 | `DB_POOL_MAX` | `20` | database connections |
+| `PUBLIC_LOGS` | `false` | expose the read-only live log view (`/logs.html`) |
 | `DEFAULT_PER_USER_LIMIT` | `4` | seats per user per show when not given at creation |
 | `PORT` | `8080` | HTTP port |
 

@@ -32,7 +32,7 @@ public class RequestFilter extends OncePerRequestFilter {
             chain.doFilter(req, res);
         } finally {
             String path = req.getRequestURI();
-            if (!path.equals("/metrics") && !path.equals("/healthz")) {
+            if (!path.equals("/metrics") && !path.equals("/healthz") && !path.startsWith("/logs")) { // /logs* excluded: viewing logs must not generate logs
                 MDC.put("method", req.getMethod());
                 MDC.put("path", path.replaceAll("[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}", ":id"));
                 MDC.put("status", String.valueOf(res.getStatus()));

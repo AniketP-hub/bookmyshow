@@ -1,5 +1,9 @@
-# Automatic HTTPS (Let's Encrypt) for $DOMAIN, proxying to the app container.
+# Automatic HTTPS (Lets Encrypt) for $DOMAIN, proxying to the app container.
 {$DOMAIN} {
-	encode gzip
-	reverse_proxy app:8080
+	# do not compress/buffer the live log stream
+	@compressible not path /logs/stream
+	encode @compressible gzip
+	reverse_proxy app:8080 {
+		flush_interval -1
+	}
 }

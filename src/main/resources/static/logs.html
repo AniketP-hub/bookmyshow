@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live logs - seat reservation</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0f1115; color: #d7dae0; font: 13px/1.4 ui-monospace, Menlo, Consolas, monospace; }
+  header { position: sticky; top: 0; background: #171a21; padding: 10px 16px; border-bottom: 1px solid #262b36;
+           display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+  h1 { font-size: 14px; margin: 0; font-weight: 600; }
+  .stat b { color: #fff; }
+  .s2 { color: #6fd08c } .s4 { color: #e5c07b } .s5 { color: #ff6b6b }
+  input { background: #0f1115; color: inherit; border: 1px solid #333a48; border-radius: 4px; padding: 4px 8px; font: inherit; }
+  button { background: #262b36; color: inherit; border: 1px solid #333a48; border-radius: 4px; padding: 4px 10px; font: inherit; cursor: pointer; }
+  #dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #888; margin-right: 6px; }
+  #dot.on { background: #6fd08c; }
+  #log { padding: 8px 16px 40px; }
+  .row { white-space: pre-wrap; word-break: break-all; padding: 1px 0; border-bottom: 1px solid #1a1e27; }
+  .t { color: #6b7385 } .rid { color: #6b7385 } .path { color: #9cc4ff } .out { color: #c3a6ff } .app { color: #8a93a6; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span id="dot"></span>Live logs</h1>
+  <span class="stat">requests <b id="n">0</b></span>
+  <span class="stat s2">2xx <b id="c2">0</b></span>
+  <span class="stat s4">4xx <b id="c4">0</b></span>
+  <span class="stat s5">5xx <b id="c5">0</b></span>
+  <input id="f" placeholder="filter text (e.g. 409, seat_taken, user id)" size="34">
+  <button id="pause">Pause</button>
+  <button id="clear">Clear</button>
+  <a href="/logs?lines=500" style="color:#9cc4ff">raw</a>
+  <a href="/metrics" style="color:#9cc4ff">metrics</a>
+</header>
+<div id="log"></div>
+<script>
+  var logEl = document.getElementById('log'), dot = document.getElementById('dot');
+  var counts = { n: 0, c2: 0, c4: 0, c5: 0 }, paused = false, MAX_ROWS = 600;
+  var pending = [], filter = '';
+
+  function esc(s) { return String(s).replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); }
+
+  function render(line) {
+    var e;
+    try { e = JSON.parse(line); } catch (x) { return '<div class="row app">' + esc(line) + '</div>'; }
+    if (e.logger_name === 'access') {
+      counts.n++;
+      var cls = String(e.status).charAt(0);
+      if (cls === '2') counts.c2++; else if (cls === '4') counts.c4++; else if (cls === '5') counts.c5++;
+      var time = (e['@timestamp'] || '').substring(11, 23);
+      return '<div class="row"><span class="t">' + time + '</span> <span class="s' + cls + '">' + esc(e.status) + '</span> '
+        + esc(e.method) + ' <span class="path">' + esc(e.path) + '</span> ' + esc(e.ms) + 'ms'
+        + (e.user_id ? ' user=' + esc(e.user_id) : '') + (e.outcome ? ' <span class="out">' + esc(e.outcome) + '</span>' : '')
+        + ' <span class="rid">' + esc(e.request_id || '') + '</span></div>';
+    }
+    return '<div class="row app">' + esc((e['@timestamp'] || '').substring(11, 23)) + ' ' + esc(e.level || '') + ' ' + esc(e.message || line) + '</div>';
+  }
+
+  function flush() {
+    if (paused || !pending.length) return;
+    var html = pending.join(''); pending = [];
+    logEl.insertAdjacentHTML('beforeend', html);
+    while (logEl.childElementCount > MAX_ROWS) logEl.removeChild(logEl.firstChild);
+    window.scrollTo(0, document.body.scrollHeight);
+    document.getElementById('n').textContent = counts.n;
+    document.getElementById('c2').textContent = counts.c2;
+    document.getElementById('c4').textContent = counts.c4;
+    document.getElementById('c5').textContent = counts.c5;
+  }
+  setInterval(flush, 250); // batch DOM work so a 1000 req/s burst stays readable
+
+  var src;
+  function connect() {
+    src = new EventSource('/logs/stream');
+    src.onopen = function () { dot.className = 'on'; };
+    src.onerror = function () { dot.className = ''; };
+    src.onmessage = function (m) {
+      if (filter && m.data.indexOf(filter) === -1) return;
+      pending.push(render(m.data));
+      if (pending.length > 2000) pending = pending.slice(-1000);
+    };
+  }
+  connect();
+  document.getElementById('f').addEventListener('input', function (ev) { filter = ev.target.value; });
+  document.getElementById('pause').addEventListener('click', function (ev) {
+    paused = !paused; ev.target.textContent = paused ? 'Resume' : 'Pause'; if (!paused) flush();
+  });
+  document.getElementById('clear').addEventListener('click', function () {
+    logEl.innerHTML = ''; pending = []; counts = { n: 0, c2: 0, c4: 0, c5: 0 }; flush();
+  });
+</script>
+</body>
+</html>

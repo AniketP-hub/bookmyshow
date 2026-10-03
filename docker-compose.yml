@@ -17,4 +17,5 @@ services:
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/seats
       ADMIN_TOKEN: dev-admin-token
+      PUBLIC_LOGS: "true"
     ports: ["8080:8080"]
